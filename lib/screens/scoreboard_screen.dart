@@ -70,8 +70,13 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
       ),
     );
     if (ok == true && mounted) {
-      context.read<GameState>().newGame();
-      _send(Cmd.newGame);
+      final gs = context.read<GameState>();
+      final ble = context.read<BleService>();
+      gs.newGame();
+      final packet = gs.buildPacket();
+      debugPrint('[PROTO] NEW GAME — sending 0x76 ("v") then reset packet "$packet"');
+      await ble.sendCommand(Cmd.newGame);
+      await ble.sendPacket(packet);
     }
   }
 
@@ -100,9 +105,26 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                   vertical: 10,
                 ),
               ),
-              onPressed: () {
-                _sendAndUpdate(gs.startStop);
-                _send(gs.key ? Cmd.startClock : Cmd.stopClock);
+              onPressed: () async {
+                gs.startStop(); // mutates key + notifyListeners
+                final isStart = gs.key; // already toggled
+                final cmd = isStart ? Cmd.startClock : Cmd.stopClock;
+                final ble = context.read<BleService>();
+                final packet = gs.buildPacket();
+                final ending = GameState.timerPacketLineEnding
+                    .replaceAll('\r', '\\r')
+                    .replaceAll('\n', '\\n');
+                debugPrint('[PROTO] ${isStart ? "START" : "STOP"} — '
+                    'prefix="${GameState.timerPacketPrefix}" '
+                    'ending="$ending" '
+                    'order=${GameState.timerCommandFirst ? "cmd→packet" : "packet→cmd"}');
+                if (GameState.timerCommandFirst) {
+                  await ble.sendCommand(cmd);
+                  await ble.sendPacket(packet);
+                } else {
+                  await ble.sendPacket(packet);
+                  await ble.sendCommand(cmd);
+                }
               },
               icon: Icon(gs.key ? Icons.pause : Icons.play_arrow, size: 18),
               label: Text(gs.key ? 'STOP' : 'START'),

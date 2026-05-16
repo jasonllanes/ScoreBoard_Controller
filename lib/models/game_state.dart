@@ -96,11 +96,20 @@ class GameState extends ChangeNotifier {
   // separator + Min1 + Min2 + Sec1 + Sec2 + mSec +
   //             Shot1 + Shot2 + mShot + Hornx + Min1
   //
-  // The separator '*' marks this as a timer-update packet to the Arduino.
-  // Single-byte command packets (buttons) are sent via BleService.sendCommand.
+  // ── Timer protocol test config ────────────────────────────────────────────
+  // Change these constants to test protocol variants without refactoring.
+  //
+  // timerPacketPrefix:   '*' (PDF) or '_' (original — collides with Cmd.horn)
+  // timerPacketLineEnding: '' | '\n' | '\r\n' — Arduino may need newline
+  // timerCommandFirst:   true  = send 's'/'t' BEFORE packet
+  //                      false = send packet BEFORE 's'/'t'
   // ─────────────────────────────────────────────────────────────────────────
+  static const String timerPacketPrefix = '_'; // was '*' — MIT blocks show '_' prefix
+  static const String timerPacketLineEnding = ''; // was '\n' — testing no terminator (fixed-length parse)
+  static const bool timerCommandFirst = true;
+
   String buildPacket() {
-    return '*$min1$min2$sec1$sec2$mSec$shot1$shot2$mShot$hornx$min1';
+    return '$timerPacketPrefix$min1$min2$sec1$sec2$mSec$shot1$shot2$mShot$hornx$min1$timerPacketLineEnding';
   }
 
   // ─────────────────────────────────────────────────────────────────────────
