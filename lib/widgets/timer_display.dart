@@ -4,7 +4,16 @@ import '../models/game_state.dart';
 
 /// Large segment-style display for the game timer and shot clock.
 class TimerDisplay extends StatelessWidget {
-  const TimerDisplay({super.key});
+  final VoidCallback? onGameTimeTap;
+  final VoidCallback? onPeriodTap;
+  final VoidCallback? onShotClockTap;
+
+  const TimerDisplay({
+    super.key,
+    this.onGameTimeTap,
+    this.onPeriodTap,
+    this.onShotClockTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -30,98 +39,107 @@ class TimerDisplay extends StatelessWidget {
               // ── Game timer ─────────────────────────────────────────────
               Flexible(
                 flex: 5,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      'GAME TIME',
-                      style: TextStyle(
-                        color: Colors.orange,
-                        fontSize: labelFs,
-                        letterSpacing: 1.2,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        gameTime,
+                child: GestureDetector(
+                  onTap: onGameTimeTap,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'GAME TIME',
                         style: TextStyle(
-                          color: Colors.white,
-                          fontSize: timerFs,
+                          color: Colors.orange,
+                          fontSize: labelFs,
+                          letterSpacing: 1.2,
                           fontWeight: FontWeight.bold,
-                          fontFamily: 'monospace',
-                          letterSpacing: 2,
                         ),
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 2),
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          gameTime,
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: timerFs,
+                            fontWeight: FontWeight.bold,
+                            fontFamily: 'monospace',
+                            letterSpacing: 2,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
 
               // ── Period badge ────────────────────────────────────────────
               Flexible(
                 flex: 2,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      'QTR',
-                      style: TextStyle(
-                        color: Colors.white54,
-                        fontSize: labelFs,
-                        letterSpacing: 1.2,
+                child: GestureDetector(
+                  onTap: onPeriodTap,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'QTR',
+                        style: TextStyle(
+                          color: Colors.white54,
+                          fontSize: labelFs,
+                          letterSpacing: 1.2,
+                        ),
                       ),
-                    ),
-                    Text(
-                      '${gs.period}',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: qtrFs,
-                        fontWeight: FontWeight.bold,
+                      Text(
+                        '${gs.period}',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: qtrFs,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
 
               // ── Shot clock ──────────────────────────────────────────────
               Flexible(
                 flex: 4,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      'SHOT CLOCK',
-                      style: TextStyle(
-                        color: Colors.orange,
-                        fontSize: labelFs,
-                        letterSpacing: 1.2,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.centerRight,
-                      child: Text(
-                        shotClock,
+                child: GestureDetector(
+                  onTap: onShotClockTap,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'SHOT CLOCK',
                         style: TextStyle(
-                          color: gs.shotclockStatus
-                              ? Colors.redAccent
-                              : Colors.white,
-                          fontSize: timerFs,
+                          color: Colors.orange,
+                          fontSize: labelFs,
+                          letterSpacing: 1.2,
                           fontWeight: FontWeight.bold,
-                          fontFamily: 'monospace',
-                          letterSpacing: 2,
                         ),
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 2),
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerRight,
+                        child: Text(
+                          shotClock,
+                          style: TextStyle(
+                            color: gs.shotclockStatus
+                                ? Colors.redAccent
+                                : Colors.white,
+                            fontSize: timerFs,
+                            fontWeight: FontWeight.bold,
+                            fontFamily: 'monospace',
+                            letterSpacing: 2,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ],

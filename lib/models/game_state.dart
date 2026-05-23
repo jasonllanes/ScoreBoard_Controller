@@ -104,8 +104,10 @@ class GameState extends ChangeNotifier {
   // timerCommandFirst:   true  = send 's'/'t' BEFORE packet
   //                      false = send packet BEFORE 's'/'t'
   // ─────────────────────────────────────────────────────────────────────────
-  static const String timerPacketPrefix = '_'; // was '*' — MIT blocks show '_' prefix
-  static const String timerPacketLineEnding = ''; // was '\n' — testing no terminator (fixed-length parse)
+  static const String timerPacketPrefix =
+      '_'; // was '*' — MIT blocks show '_' prefix
+  static const String timerPacketLineEnding =
+      ''; // was '\n' — testing no terminator (fixed-length parse)
   static const bool timerCommandFirst = true;
 
   String buildPacket() {
@@ -252,6 +254,31 @@ class GameState extends ChangeNotifier {
 
   void teamBTOLPlus() {
     teamBTOL++;
+    notifyListeners();
+  }
+
+  // ── Edit setters (only call when clock is stopped) ──────────────────────
+  void setGameTime({required int minutes, required int seconds}) {
+    final m = minutes.clamp(0, 99);
+    final s = seconds.clamp(0, 59);
+    min1 = m ~/ 10;
+    min2 = m % 10;
+    sec1 = s ~/ 10;
+    sec2 = s % 10;
+    mSec = 0;
+    notifyListeners();
+  }
+
+  void setShotClock({required int seconds}) {
+    final s = seconds.clamp(0, 99);
+    shot1 = s ~/ 10;
+    shot2 = s % 10;
+    mShot = 0;
+    notifyListeners();
+  }
+
+  void setPeriod(int p) {
+    period = p.clamp(1, 4);
     notifyListeners();
   }
 

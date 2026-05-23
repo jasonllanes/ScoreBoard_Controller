@@ -74,10 +74,210 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
       final ble = context.read<BleService>();
       gs.newGame();
       final packet = gs.buildPacket();
-      debugPrint('[PROTO] NEW GAME — sending 0x76 ("v") then reset packet "$packet"');
+      debugPrint(
+        '[PROTO] NEW GAME — sending 0x76 ("v") then reset packet "$packet"',
+      );
       await ble.sendCommand(Cmd.newGame);
       await ble.sendPacket(packet);
     }
+  }
+
+  void _guardedTap(VoidCallback ifStopped) {
+    if (context.read<GameState>().key) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Stop clock to edit'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+    ifStopped();
+  }
+
+  Future<void> _editGameTime() async {
+    final gs = context.read<GameState>();
+    final initMin = gs.min1 * 10 + gs.min2;
+    final initSec = gs.sec1 * 10 + gs.sec2;
+
+    // Values captured inside Navigator.pop — no controller to dispose after pop.
+    var minText = '$initMin';
+    var secText = '$initSec';
+
+    final result = await showDialog<({int minutes, int seconds})>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF112233),
+        title: const Text(
+          'Edit Game Time',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: Row(
+          children: [
+            Expanded(
+              child: TextFormField(
+                initialValue: minText,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(color: Colors.white),
+                onChanged: (v) => minText = v,
+                decoration: const InputDecoration(
+                  labelText: 'Min (0-99)',
+                  labelStyle: TextStyle(color: Colors.white54),
+                ),
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 8),
+              child: Text(
+                ':',
+                style: TextStyle(color: Colors.white, fontSize: 24),
+              ),
+            ),
+            Expanded(
+              child: TextFormField(
+                initialValue: secText,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(color: Colors.white),
+                onChanged: (v) => secText = v,
+                decoration: const InputDecoration(
+                  labelText: 'Sec (0-59)',
+                  labelStyle: TextStyle(color: Colors.white54),
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+            onPressed: () => Navigator.pop(ctx, (
+              minutes: int.tryParse(minText) ?? initMin,
+              seconds: int.tryParse(secText) ?? initSec,
+            )),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted || result == null) return;
+    gs.setGameTime(minutes: result.minutes, seconds: result.seconds);
+    context.read<BleService>().sendPacket(gs.buildPacket());
+  }
+
+  Future<void> _editPeriod() async {
+    final gs = context.read<GameState>();
+    final chosen = await showDialog<int>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF112233),
+        title: const Text('Set Quarter', style: TextStyle(color: Colors.white)),
+        content: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final q in [1, 2, 3, 4])
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: gs.period == q
+                      ? Colors.orange
+                      : const Color(0xFF1E3050),
+                ),
+                onPressed: () => Navigator.pop(ctx, q),
+                child: Text('Q$q'),
+              ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted || chosen == null) return;
+    gs.setPeriod(chosen);
+  }
+
+  Future<void> _editShotClock() async {
+    final gs = context.read<GameState>();
+    final initSec = gs.shot1 * 10 + gs.shot2;
+
+    // StatefulBuilder owns the local state for quick-set buttons + text field.
+    // Value is parsed and passed to Navigator.pop before dialog tears down.
+    var secText = '$initSec';
+
+    final result = await showDialog<int>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          backgroundColor: const Color(0xFF112233),
+          title: const Text(
+            'Edit Shot Clock',
+            style: TextStyle(color: Colors.white),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF1E3050),
+                    ),
+                    onPressed: () => setState(() => secText = '24'),
+                    child: const Text('24 sec'),
+                  ),
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF1E3050),
+                    ),
+                    onPressed: () => setState(() => secText = '14'),
+                    child: const Text('14 sec'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              // key forces rebuild with new initialValue when quick buttons fire.
+              TextFormField(
+                key: ValueKey(secText),
+                initialValue: secText,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(color: Colors.white),
+                onChanged: (v) => secText = v,
+                decoration: const InputDecoration(
+                  labelText: 'Custom (0-99 sec)',
+                  labelStyle: TextStyle(color: Colors.white54),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+              onPressed: () =>
+                  Navigator.pop(ctx, int.tryParse(secText) ?? initSec),
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (!mounted || result == null) return;
+    gs.setShotClock(seconds: result);
+    context.read<BleService>().sendPacket(gs.buildPacket());
   }
 
   Future<void> _confirmNextQuarter() async {
@@ -114,10 +314,12 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                 final ending = GameState.timerPacketLineEnding
                     .replaceAll('\r', '\\r')
                     .replaceAll('\n', '\\n');
-                debugPrint('[PROTO] ${isStart ? "START" : "STOP"} — '
-                    'prefix="${GameState.timerPacketPrefix}" '
-                    'ending="$ending" '
-                    'order=${GameState.timerCommandFirst ? "cmd→packet" : "packet→cmd"}');
+                debugPrint(
+                  '[PROTO] ${isStart ? "START" : "STOP"} — '
+                  'prefix="${GameState.timerPacketPrefix}" '
+                  'ending="$ending" '
+                  'order=${GameState.timerCommandFirst ? "cmd→packet" : "packet→cmd"}',
+                );
                 if (GameState.timerCommandFirst) {
                   await ble.sendCommand(cmd);
                   await ble.sendPacket(packet);
@@ -317,7 +519,11 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
     return Column(
       children: [
         const ConnectionBar(),
-        const TimerDisplay(),
+        TimerDisplay(
+          onGameTimeTap: () => _guardedTap(_editGameTime),
+          onPeriodTap: () => _guardedTap(_editPeriod),
+          onShotClockTap: () => _guardedTap(_editShotClock),
+        ),
         _controlRow(gs),
         Expanded(
           child: Row(
@@ -349,7 +555,14 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                 flex: 9,
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
-                  children: [const TimerDisplay(), _controlRow(gs)],
+                  children: [
+                    TimerDisplay(
+                      onGameTimeTap: () => _guardedTap(_editGameTime),
+                      onPeriodTap: () => _guardedTap(_editPeriod),
+                      onShotClockTap: () => _guardedTap(_editShotClock),
+                    ),
+                    _controlRow(gs),
+                  ],
                 ),
               ),
               // Divider
