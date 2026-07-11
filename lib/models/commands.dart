@@ -3,6 +3,8 @@
 abstract final class Cmd {
   // ── General ──────────────────────────────────────────────────────────────
   static const int null_ = 0x2D; // '-'  null / no-op
+  // Shares byte '_' (0x5F) with GameState.timerPacketPrefix; Arduino tells them
+  // apart by length (lone byte = horn, full packet = timer). Keep in sync.
   static const int horn = 0x5F; // '_'  gametime + shotclock + horn
   static const int newGame = 0x76; // 'v'  new game
 

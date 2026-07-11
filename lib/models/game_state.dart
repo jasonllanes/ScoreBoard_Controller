@@ -104,6 +104,8 @@ class GameState extends ChangeNotifier {
   // timerCommandFirst:   true  = send 's'/'t' BEFORE packet
   //                      false = send packet BEFORE 's'/'t'
   // ─────────────────────────────────────────────────────────────────────────
+  // NOTE: '_' (0x5F) is also Cmd.horn. Safe because the Arduino disambiguates by
+  // length: a lone '_' byte = horn, a full '_'-prefixed packet = timer update.
   static const String timerPacketPrefix =
       '_'; // was '*' — MIT blocks show '_' prefix
   static const String timerPacketLineEnding =
