@@ -283,7 +283,9 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
   Future<void> _confirmNextQuarter() async {
     final gs = context.read<GameState>();
     if (gs.period >= 4) return;
-    context.read<GameState>().nextQuarter();
+    // Clock is stopped here, so TimerService sends nothing — push the reset
+    // digits ourselves or the board keeps the old time until START.
+    _sendAndUpdate(gs.nextQuarter);
   }
 
   // ── Shared sections ───────────────────────────────────────────────────────

@@ -159,43 +159,53 @@ class BleService extends ChangeNotifier {
 
   // ── Data sending ─────────────────────────────────────────────────────────
 
+  // HM-10 class modules coalesce writes issued a few ms apart into one chunk.
+  // A command byte glued onto the front of a timer packet shifts the Arduino's
+  // fixed-offset parse by one byte (10:00 shown as 01:00), so writes are
+  // serialised and spaced. Raise the gap if a board still merges them.
+  static const Duration writeGap = Duration(milliseconds: 40);
+  Future<void> _writeQueue = Future<void>.value();
+  DateTime _lastWrite = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Queues a write so it never shares a BLE chunk with the previous one.
+  Future<void> _enqueueWrite(List<int> data) {
+    _writeQueue = _writeQueue.then((_) => _writeSpaced(data));
+    return _writeQueue;
+  }
+
+  Future<void> _writeSpaced(List<int> data) async {
+    final elapsed = DateTime.now().difference(_lastWrite);
+    if (elapsed < writeGap) {
+      await Future<void>.delayed(writeGap - elapsed);
+    }
+    for (final ble in _connectedDevices) {
+      debugPrint('[BLE]   → ${ble.name} (${ble.device.remoteId}) '
+          'characteristic=${ble.characteristic != null ? "present" : "NULL"}');
+      if (ble.isConnected && ble.characteristic != null) {
+        try {
+          await ble.characteristic!.write(data, withoutResponse: true);
+          debugPrint('[BLE]   ✓ write OK');
+        } catch (e) {
+          debugPrint('[BLE]   ✗ write FAILED: $e');
+        }
+      }
+    }
+    _lastWrite = DateTime.now();
+  }
+
   /// Send a single ASCII command byte (button press) to all connected devices.
-  Future<void> sendCommand(int asciiCode) async {
+  Future<void> sendCommand(int asciiCode) {
     final char = String.fromCharCode(asciiCode);
     debugPrint('[BLE] sendCommand: 0x${asciiCode.toRadixString(16).toUpperCase()} ("$char") — '
         '${_connectedDevices.length} device(s)');
-    final data = [asciiCode];
-    for (final ble in _connectedDevices) {
-      debugPrint('[BLE]   → ${ble.name} (${ble.device.remoteId}) '
-          'characteristic=${ble.characteristic != null ? "present" : "NULL"}');
-      if (ble.isConnected && ble.characteristic != null) {
-        try {
-          await ble.characteristic!.write(data, withoutResponse: true);
-          debugPrint('[BLE]   ✓ write OK');
-        } catch (e) {
-          debugPrint('[BLE]   ✗ write FAILED: $e');
-        }
-      }
-    }
+    return _enqueueWrite([asciiCode]);
   }
 
   /// Send a timer-update packet string to all connected devices.
-  Future<void> sendPacket(String packet) async {
+  Future<void> sendPacket(String packet) {
     final escaped = packet.replaceAll('\r', '\\r').replaceAll('\n', '\\n');
     debugPrint('[BLE] sendPacket: "$escaped" — ${_connectedDevices.length} device(s)');
-    final data = utf8.encode(packet);
-    for (final ble in _connectedDevices) {
-      debugPrint('[BLE]   → ${ble.name} (${ble.device.remoteId}) '
-          'characteristic=${ble.characteristic != null ? "present" : "NULL"}');
-      if (ble.isConnected && ble.characteristic != null) {
-        try {
-          await ble.characteristic!.write(data, withoutResponse: true);
-          debugPrint('[BLE]   ✓ write OK');
-        } catch (e) {
-          debugPrint('[BLE]   ✗ write FAILED: $e');
-        }
-      }
-    }
+    return _enqueueWrite(utf8.encode(packet));
   }
 
   // Accepts both full 128-bit UUID and short 16-bit UUID forms.
