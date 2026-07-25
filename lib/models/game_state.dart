@@ -70,6 +70,7 @@ class GameState extends ChangeNotifier {
       _shotClockMs = 0;
       hornx = 1;
       shotclockStatus = false;
+      key = false; // shot clock expiring also stops the game clock
     }
 
     return true;
@@ -105,15 +106,20 @@ class GameState extends ChangeNotifier {
   // State mutations (called from UI — each calls notifyListeners)
   // ─────────────────────────────────────────────────────────────────────────
 
-  void startStop() {
-    key = !key;
-    if (key) {
+  /// Returns false (and does nothing) if trying to start the game clock
+  /// with no shot clock set — the game clock can't run without one.
+  bool startStop() {
+    if (!key) {
+      if (_shotClockMs <= 0) return false;
+      key = true;
       hornx = 0;
       shotclockStatus = true;
     } else {
+      key = false;
       shotclockStatus = false;
     }
     notifyListeners();
+    return true;
   }
 
   void resetShotClock(int seconds, {required bool start}) {

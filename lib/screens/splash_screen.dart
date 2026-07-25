@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -63,6 +64,14 @@ class _SplashScreenState extends State<SplashScreen> {
     });
 
     if (allOk) {
+      if (Platform.isAndroid) {
+        // Best-effort — while unplugged from USB, Android's Doze/App
+        // Standby throttling can otherwise batch/delay the 200ms game and
+        // shot clock tick timer, making the countdown visibly stutter.
+        // Not required for core BLE functionality, so we don't block
+        // navigation on the result or treat a denial as an error.
+        unawaited(Permission.ignoreBatteryOptimizations.request());
+      }
       await Future.delayed(const Duration(milliseconds: 600));
       if (mounted) {
         Navigator.of(context).pushReplacement(

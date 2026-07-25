@@ -2,12 +2,23 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+// The main board and shot clock boards parse the timer packet differently:
+// the main board skips the leading prefix byte before reading digits, but
+// the shot clock boards' firmware doesn't — it reads all 10 digit fields
+// starting right from byte 0, which shifts every field one position early
+// (e.g. "10:00"/"24" comes out as "01:00"/"02"). Since all 3 peripherals
+// are otherwise indistinguishable (same advertised name), the role is
+// tagged manually per connected device from the scan screen.
+enum BleRole { unknown, mainBoard, shotClock }
 
 class BleDevice {
   final BluetoothDevice device;
   BluetoothCharacteristic? characteristic;
   bool isConnecting = false;
   bool isConnected = false;
+  BleRole role = BleRole.unknown;
 
   BleDevice(this.device);
 
@@ -143,6 +154,19 @@ class BleService extends ChangeNotifier {
           notifyListeners();
         }
       });
+
+      // Same advertised name for all 3 boards, but MAC address is stable
+      // per physical unit — restore whichever role was tagged for this MAC
+      // last time so it doesn't need to be re-tagged every session. This
+      // is best-effort and must never be able to undo a connection that
+      // already succeeded, so any failure here just leaves the role
+      // unknown instead of propagating.
+      try {
+        ble.role = await _loadRole(device.remoteId.str);
+        notifyListeners();
+      } catch (e) {
+        debugPrint('[BLE] ⚠ role restore failed for ${ble.name}: $e');
+      }
     } catch (e) {
       debugPrint('[BLE] ✗ connect error for ${ble.name}: $e');
       _connectedDevices.remove(ble);
@@ -155,6 +179,36 @@ class BleService extends ChangeNotifier {
     _connectedDevices.removeWhere((d) => d.device.remoteId == device.remoteId);
     await device.disconnect();
     notifyListeners();
+  }
+
+  static const String _rolePrefKeyPrefix = 'ble_role_';
+
+  Future<void> setRole(BluetoothDevice device, BleRole role) async {
+    for (final ble in _connectedDevices) {
+      if (ble.device.remoteId == device.remoteId) {
+        ble.role = role;
+        break;
+      }
+    }
+    notifyListeners();
+
+    // Persisting is a nice-to-have — a failure here shouldn't undo the
+    // in-memory role assignment that was just applied above.
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('$_rolePrefKeyPrefix${device.remoteId.str}', role.name);
+    } catch (e) {
+      debugPrint('[BLE] ⚠ role save failed for ${device.remoteId}: $e');
+    }
+  }
+
+  Future<BleRole> _loadRole(String macAddress) async {
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getString('$_rolePrefKeyPrefix$macAddress');
+    return BleRole.values.firstWhere(
+      (r) => r.name == stored,
+      orElse: () => BleRole.unknown,
+    );
   }
 
   // ── Data sending ─────────────────────────────────────────────────────────
@@ -227,12 +281,47 @@ class BleService extends ChangeNotifier {
     }
   }
 
+  // Coalescing: if a burst of packets arrives faster than the queue can
+  // drain them (e.g. a few stale 200ms-tick packets still waiting right as
+  // New Game resets state), only the *latest* one actually matters for
+  // display. Sending every stale one in order would visibly flicker
+  // through old values before landing on the current state, so skip
+  // straight to whatever's newest once a write slot frees up.
+  String? _latestPacket;
+  bool _packetWorkerRunning = false;
+
   /// Send a timer-update packet string to all connected devices.
-  Future<void> sendPacket(String packet) => _enqueue(() => _writePacket(packet));
+  Future<void> sendPacket(String packet) async {
+    _latestPacket = packet;
+    if (_packetWorkerRunning) return;
+    _packetWorkerRunning = true;
+    try {
+      while (_latestPacket != null) {
+        // Pick which packet to send at the last possible moment — inside
+        // the enqueued closure, right before the physical write — instead
+        // of when it was first scheduled. If something newer arrived while
+        // this slot was waiting out the write-queue's spacing delay, send
+        // that instead of the value that was current back when we started
+        // waiting for a turn.
+        await _enqueue(() {
+          final toSend = _latestPacket;
+          _latestPacket = null;
+          return toSend == null ? Future.value() : _writePacket(toSend);
+        });
+      }
+    } finally {
+      _packetWorkerRunning = false;
+    }
+  }
 
   Future<void> _writePacket(String packet) async {
     final escaped = packet.replaceAll('\r', '\\r').replaceAll('\n', '\\n');
     debugPrint('[BLE] sendPacket: "$escaped" — ${_connectedDevices.length} device(s)');
+    // Broadcast the identical packet to every connected board — the main
+    // board and both shot clocks all parse it the same way. (Previously
+    // tried sending the shot clocks a prefix-stripped variant based on a
+    // theory that turned out wrong and regressed the main board instead;
+    // reverted.)
     final data = utf8.encode(packet);
     for (final ble in _connectedDevices) {
       debugPrint('[BLE]   → ${ble.name} (${ble.device.remoteId}) '

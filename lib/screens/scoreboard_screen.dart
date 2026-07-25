@@ -4,7 +4,6 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import '../models/commands.dart';
 import '../models/game_state.dart';
 import '../services/ble_service.dart';
-import '../services/timer_service.dart';
 import '../widgets/timer_display.dart';
 import '../widgets/team_panel.dart';
 import '../widgets/connection_bar.dart';
@@ -17,22 +16,34 @@ class ScoreboardScreen extends StatefulWidget {
 }
 
 class _ScoreboardScreenState extends State<ScoreboardScreen> {
-  late TimerService _timerService;
+  bool _showBoardLoading = false;
+
+  // SC14/SC24: first tap just loads the value (doesn't start it); tapping
+  // the SAME preset again — whenever that happens, no quick-double-tap
+  // timing required — is what actually starts it counting down. Tapping a
+  // different preset (or the same one a 3rd time) re-arms fresh instead of
+  // starting, so it stays a predictable two-step pattern rather than a
+  // hidden timing window.
+  int? _armedShotClockSeconds;
+
+  void _tapShotClockPreset(GameState gs, int seconds) {
+    if (_armedShotClockSeconds == seconds) {
+      _sendAndUpdate(() => gs.resetShotClock(seconds, start: true));
+      setState(() => _armedShotClockSeconds = null);
+    } else {
+      _sendAndUpdate(() => gs.resetShotClock(seconds, start: false));
+      setState(() => _armedShotClockSeconds = seconds);
+    }
+  }
 
   @override
   void initState() {
     super.initState();
     WakelockPlus.enable();
-    _timerService = TimerService(
-      gameState: context.read<GameState>(),
-      bleService: context.read<BleService>(),
-    );
-    _timerService.start();
   }
 
   @override
   void dispose() {
-    _timerService.dispose();
     WakelockPlus.disable();
     super.dispose();
   }
@@ -82,6 +93,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
     if (ok == true && mounted) {
       final gs = context.read<GameState>();
       final ble = context.read<BleService>();
+      setState(() => _armedShotClockSeconds = null);
       gs.newGame();
       final packet = gs.buildPacket();
       debugPrint(
@@ -350,6 +362,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
   Future<void> _confirmNextQuarter() async {
     final gs = context.read<GameState>();
     if (gs.period >= 4) return;
+    setState(() => _armedShotClockSeconds = null);
     context.read<GameState>().nextQuarter();
   }
 
@@ -373,7 +386,16 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                 ),
               ),
               onPressed: () async {
-                gs.startStop(); // mutates key + notifyListeners
+                final ok = gs.startStop(); // mutates key + notifyListeners
+                if (!ok) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Set a shot clock before starting'),
+                      duration: Duration(seconds: 2),
+                    ),
+                  );
+                  return;
+                }
                 final isStart = gs.key; // already toggled
                 final cmd = isStart ? Cmd.startClock : Cmd.stopClock;
                 final ble = context.read<BleService>();
@@ -425,20 +447,16 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
           Expanded(
             child: _ShotClockPresetBtn(
               label: 'SC 14',
-              onTap: () =>
-                  _sendAndUpdate(() => gs.resetShotClock(14, start: false)),
-              onDoubleTap: () =>
-                  _sendAndUpdate(() => gs.resetShotClock(14, start: true)),
+              armed: _armedShotClockSeconds == 14,
+              onTap: () => _tapShotClockPreset(gs, 14),
             ),
           ),
           const SizedBox(width: 5),
           Expanded(
             child: _ShotClockPresetBtn(
               label: 'SC 24',
-              onTap: () =>
-                  _sendAndUpdate(() => gs.resetShotClock(24, start: false)),
-              onDoubleTap: () =>
-                  _sendAndUpdate(() => gs.resetShotClock(24, start: true)),
+              armed: _armedShotClockSeconds == 24,
+              onTap: () => _tapShotClockPreset(gs, 24),
             ),
           ),
         ],
@@ -456,6 +474,32 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
           _BottomBtn(label: '◀ Left', onTap: () => _send(Cmd.leftArrow)),
           const SizedBox(width: 4),
           _BottomBtn(label: 'Right ▶', onTap: () => _send(Cmd.rightArrow)),
+          const SizedBox(width: 4),
+          _BottomBtn(
+            label: 'Show Board',
+            color: Colors.teal,
+            loading: _showBoardLoading,
+            onTap: _showBoardLoading
+                ? null
+                : () async {
+                    // TimerService now resends the current packet every
+                    // 200ms continuously, even while the clock is stopped
+                    // (see timer_service.dart), so this no longer needs to
+                    // manually burst/retry — any write that lands garbled
+                    // while the board is still mid-transition self-corrects
+                    // on its own within one more tick. Just send the
+                    // trigger once; the loading spinner is purely cosmetic,
+                    // covering the board's own transition time.
+                    setState(() => _showBoardLoading = true);
+                    try {
+                      final ble = context.read<BleService>();
+                      await ble.sendCommand(Cmd.showScoreboard);
+                      await Future.delayed(const Duration(seconds: 3));
+                    } finally {
+                      if (mounted) setState(() => _showBoardLoading = false);
+                    }
+                  },
+          ),
           const Spacer(),
           _BottomBtn(
             label: 'Next QTR',
@@ -670,31 +714,30 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
   }
 }
 
-/// SC14/SC24 preset button: single tap loads the value without starting it,
-/// double tap loads it and starts the countdown. Uses InkWell's own
-/// onTap/onDoubleTap (rather than a nested GestureDetector) so there's only
-/// one gesture recognizer — avoids gesture-arena conflicts and gets the
-/// standard double-tap disambiguation delay for free.
+/// SC14/SC24 preset button: tap loads the value without starting it; the
+/// caller tracks whether this preset is "armed" from a prior tap and turns
+/// the *next* tap on it into the start action — see
+/// _ScoreboardScreenState._tapShotClockPreset. `armed` just controls the
+/// highlight so it's visually clear another tap will start it.
 class _ShotClockPresetBtn extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
-  final VoidCallback onDoubleTap;
+  final bool armed;
 
   const _ShotClockPresetBtn({
     required this.label,
     required this.onTap,
-    required this.onDoubleTap,
+    this.armed = false,
   });
 
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: const Color(0xFF1E3050),
+      color: armed ? Colors.orange : const Color(0xFF1E3050),
       borderRadius: BorderRadius.circular(8),
       child: InkWell(
         borderRadius: BorderRadius.circular(8),
         onTap: onTap,
-        onDoubleTap: onDoubleTap,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
           child: FittedBox(
@@ -717,15 +760,32 @@ class _BottomBtn extends StatelessWidget {
   final String label;
   final VoidCallback? onTap;
   final Color color;
+  final bool loading;
 
   const _BottomBtn({
     required this.label,
     required this.onTap,
     this.color = const Color(0xFF1E3050),
+    this.loading = false,
   });
 
   @override
   Widget build(BuildContext context) {
+    if (loading) {
+      return ElevatedButton(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: color,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          minimumSize: Size.zero,
+        ),
+        onPressed: null,
+        child: const SizedBox(
+          width: 16,
+          height: 16,
+          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70),
+        ),
+      );
+    }
     return ElevatedButton(
       style: ElevatedButton.styleFrom(
         backgroundColor: onTap == null ? Colors.grey : color,

@@ -234,12 +234,41 @@ class _ConnectedTile extends StatelessWidget {
         bleDevice.device.remoteId.str,
         style: const TextStyle(color: Colors.white54, fontSize: 12),
       ),
-      trailing: TextButton(
-        onPressed: () => ble.disconnect(bleDevice.device),
-        child: const Text(
-          'Disconnect',
-          style: TextStyle(color: Colors.redAccent),
-        ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // The 3 boards look identical over BLE (same name), and the main
+          // board vs. shot clock boards parse the timer packet differently
+          // — tag each device's role so BleService knows which packet
+          // shape to send it.
+          DropdownButton<BleRole>(
+            value: bleDevice.role,
+            dropdownColor: const Color(0xFF112233),
+            underline: const SizedBox(),
+            style: const TextStyle(color: Colors.white, fontSize: 12),
+            items: const [
+              DropdownMenuItem(value: BleRole.unknown, child: Text('Role?')),
+              DropdownMenuItem(
+                value: BleRole.mainBoard,
+                child: Text('Main Board'),
+              ),
+              DropdownMenuItem(
+                value: BleRole.shotClock,
+                child: Text('Shot Clock'),
+              ),
+            ],
+            onChanged: (role) {
+              if (role != null) ble.setRole(bleDevice.device, role);
+            },
+          ),
+          TextButton(
+            onPressed: () => ble.disconnect(bleDevice.device),
+            child: const Text(
+              'Disconnect',
+              style: TextStyle(color: Colors.redAccent),
+            ),
+          ),
+        ],
       ),
     );
   }

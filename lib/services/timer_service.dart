@@ -43,8 +43,15 @@ class TimerService {
 
     if (timerChanged || shotChanged) {
       gameState.tick(); // notifies UI
-      bleService.sendPacket(gameState.buildPacket()); // send to Arduino(s)
     }
+
+    // Always resend, even when nothing changed (clock stopped/idle). This
+    // is what makes the packet stream self-correcting: a single write that
+    // lands garbled or gets dropped — e.g. right after "Show Board" while
+    // the board is still finishing its idle→live transition — heals
+    // itself within one more 200ms tick instead of staying stuck showing
+    // garbage until something else happens to trigger another send.
+    bleService.sendPacket(gameState.buildPacket());
   }
 
   void dispose() {

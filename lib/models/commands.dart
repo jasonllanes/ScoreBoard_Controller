@@ -12,7 +12,10 @@ abstract final class Cmd {
   static const int startClock = 0x73; // 's'  start game clock
   static const int stopClock = 0x74; // 't'  stop  game clock
   static const int resetClock = 0x75; // 'u'  reset game clock
-  static const int startShotClock = 0x78; // 'x'  start shot clock
+  // Transitions the board from its idle/placeholder screen to the live
+  // scoreboard display. Same byte value as the old unused "start shot
+  // clock" legacy command ('x') — repurposed since nothing else uses it.
+  static const int showScoreboard = 0x78; // 'x'  show scoreboard display
   static const int stopShotClock = 0x79; // 'y'  stop  shot clock
   static const int resetShotClock = 0x7A; // 'z'  reset shot clock
   static const int shotClock14 = 0x71; // 'q'  set shot clock → 14
