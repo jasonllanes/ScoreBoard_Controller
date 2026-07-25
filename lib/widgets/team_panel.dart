@@ -9,6 +9,7 @@ class TeamPanel extends StatelessWidget {
   final int fouls;
   final int tol; // timeouts left
   final Color accentColor;
+  final VoidCallback? onScoreTap;
 
   final VoidCallback onPlus1;
   final VoidCallback onPlus2;
@@ -25,6 +26,7 @@ class TeamPanel extends StatelessWidget {
     required this.fouls,
     required this.tol,
     required this.accentColor,
+    this.onScoreTap,
     required this.onPlus1,
     required this.onPlus2,
     required this.onMinus1,
@@ -78,15 +80,18 @@ class TeamPanel extends StatelessWidget {
                 ),
 
                 // ── Score display ────────────────────────────────────────
-                FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text(
-                    '$score',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: scoreFs,
-                      fontWeight: FontWeight.bold,
-                      fontFamily: 'monospace',
+                GestureDetector(
+                  onTap: onScoreTap,
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      '$score',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: scoreFs,
+                        fontWeight: FontWeight.bold,
+                        fontFamily: 'monospace',
+                      ),
                     ),
                   ),
                 ),

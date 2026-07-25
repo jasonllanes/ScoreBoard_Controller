@@ -4,18 +4,29 @@ class GameState extends ChangeNotifier {
   // ── Game metadata ────────────────────────────────────────────────────────
   int period = 1;
 
-  // ── Game timer (each digit stored separately, matching MIT App Inventor) ─
-  // Default: 10:00.0  → Min1=1,Min2=0,Sec1=0,Sec2=0,mSec=0
-  int min1 = 1;
-  int min2 = 0;
-  int sec1 = 0;
-  int sec2 = 0;
-  int mSec = 0;
+  // ── Game timer ────────────────────────────────────────────────────────────
+  // Stored as real milliseconds remaining (default 10:00) and ticked forward
+  // by actual elapsed wall-clock time (see tickGameTimer), so the countdown
+  // always matches the phone's real clock instead of drifting when a
+  // Timer.periodic callback fires late.
+  static const int _defaultGameMs = 10 * 60 * 1000;
+  static const int _defaultShotMs = 24 * 1000;
 
-  // ── Shot clock (default 24 → Shot1=2,Shot2=4) ───────────────────────────
-  int shot1 = 2;
-  int shot2 = 4;
-  int mShot = 0;
+  int _gameTimeMs = _defaultGameMs;
+  int _shotClockMs = _defaultShotMs;
+
+  // Digits derived from _gameTimeMs / _shotClockMs — same field names/shape
+  // as before (min1/min2/sec1/sec2/mSec, shot1/shot2/mShot) so buildPacket()
+  // and the UI widgets are unaffected.
+  int get min1 => (_gameTimeMs ~/ 60000) ~/ 10;
+  int get min2 => (_gameTimeMs ~/ 60000) % 10;
+  int get sec1 => ((_gameTimeMs ~/ 1000) % 60) ~/ 10;
+  int get sec2 => ((_gameTimeMs ~/ 1000) % 60) % 10;
+  int get mSec => (_gameTimeMs % 1000) ~/ 100;
+
+  int get shot1 => (_shotClockMs ~/ 1000) ~/ 10;
+  int get shot2 => (_shotClockMs ~/ 1000) % 10;
+  int get mShot => (_shotClockMs % 1000) ~/ 100;
 
   // ── Control flags ────────────────────────────────────────────────────────
   bool key = false; // game timer running
@@ -31,59 +42,32 @@ class GameState extends ChangeNotifier {
   int teamBTOL = 5;
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Timer tick — called every 200 ms by TimerService
-  // Replicates the MIT App Inventor nested if/else countdown exactly.
-  // Returns true if state changed (so BleService knows to send a packet).
+  // Timer tick — called by TimerService with the *actual* elapsed wall-clock
+  // milliseconds since the last tick (measured via DateTime.now()), so the
+  // countdown tracks the phone's real clock instead of assuming a fixed
+  // interval per callback. Returns true if state changed (so BleService
+  // knows to send a packet).
   // ─────────────────────────────────────────────────────────────────────────
-  bool tickGameTimer() {
+  bool tickGameTimer(int elapsedMs) {
     if (!key) return false;
-    bool changed = true;
 
-    if (mSec > 0) {
-      mSec -= 2;
-    } else if (sec2 > 0) {
-      sec2 -= 1;
-      mSec = 8;
-    } else if (sec1 > 0) {
-      sec1 -= 1;
-      mSec = 8;
-      sec2 = 9;
-    } else if (min2 > 0) {
-      min2 -= 1;
-      mSec = 8;
-      sec2 = 9;
-      sec1 = 5;
-    } else if (min1 > 0) {
-      min1 -= 1;
-      mSec = 8;
-      sec2 = 9;
-      sec1 = 5;
-      min2 = 9;
-    } else {
-      // Time expired
+    _gameTimeMs -= elapsedMs;
+    if (_gameTimeMs <= 0) {
+      _gameTimeMs = 0;
       hornx = 1;
       key = false;
       shotclockStatus = false;
-      changed = true;
     }
 
-    return changed;
+    return true;
   }
 
-  bool tickShotClock() {
+  bool tickShotClock(int elapsedMs) {
     if (!shotclockStatus) return false;
 
-    if (mShot > 0) {
-      mShot -= 2;
-    } else if (shot2 > 0) {
-      shot2 -= 1;
-      mShot = 8;
-    } else if (shot1 > 0) {
-      shot1 -= 1;
-      mShot = 8;
-      shot2 = 9;
-    } else {
-      // Shot clock expired
+    _shotClockMs -= elapsedMs;
+    if (_shotClockMs <= 0) {
+      _shotClockMs = 0;
       hornx = 1;
       shotclockStatus = false;
     }
@@ -106,8 +90,9 @@ class GameState extends ChangeNotifier {
   // ─────────────────────────────────────────────────────────────────────────
   // NOTE: '_' (0x5F) is also Cmd.horn. Safe because the Arduino disambiguates by
   // length: a lone '_' byte = horn, a full '_'-prefixed packet = timer update.
-  static const String timerPacketPrefix =
-      '_'; // was '*' — MIT blocks show '_' prefix
+  // CONFIRMED WORKING on physical hardware — do not change without testing
+  // on the actual Arduino board first (the '*' from the PDF broke sync).
+  static const String timerPacketPrefix = '_';
   static const String timerPacketLineEnding =
       ''; // was '\n' — testing no terminator (fixed-length parse)
   static const bool timerCommandFirst = true;
@@ -131,16 +116,13 @@ class GameState extends ChangeNotifier {
     notifyListeners();
   }
 
-  void resetShotClock(int seconds) {
-    // seconds is either 14 or 24
-    if (seconds == 24) {
-      shot1 = 2;
-      shot2 = 4;
-    } else {
-      shot1 = 1;
-      shot2 = 4;
-    }
-    mShot = 0;
+  void resetShotClock(int seconds, {required bool start}) {
+    // seconds is either 14 or 24. A single tap just loads the value
+    // (start: false); a double tap loads it and starts it counting down
+    // (start: true) — independent of whether the game clock is running.
+    _shotClockMs = seconds * 1000;
+    shotclockStatus = start;
+    if (hornx == 1) hornx = 0;
     notifyListeners();
   }
 
@@ -152,14 +134,8 @@ class GameState extends ChangeNotifier {
   void newGame() {
     key = false;
     shotclockStatus = false;
-    min1 = 1;
-    min2 = 0;
-    sec1 = 0;
-    sec2 = 0;
-    mSec = 0;
-    shot1 = 2;
-    shot2 = 4;
-    mShot = 0;
+    _gameTimeMs = _defaultGameMs;
+    _shotClockMs = _defaultShotMs;
     hornx = 0;
     teamAScore = 0;
     teamBScore = 0;
@@ -175,14 +151,8 @@ class GameState extends ChangeNotifier {
     period = (period < 4) ? period + 1 : period;
     key = false;
     shotclockStatus = false;
-    min1 = 1;
-    min2 = 0;
-    sec1 = 0;
-    sec2 = 0;
-    mSec = 0;
-    shot1 = 2;
-    shot2 = 4;
-    mShot = 0;
+    _gameTimeMs = _defaultGameMs;
+    _shotClockMs = _defaultShotMs;
     hornx = 0;
     notifyListeners();
   }
@@ -200,6 +170,15 @@ class GameState extends ChangeNotifier {
 
   void teamAScoreMinus1() {
     if (teamAScore > 0) teamAScore--;
+    notifyListeners();
+  }
+
+  // Direct edit (e.g. from a "tap score to type a number" dialog). The
+  // board has no "set score" command, only +1/-1 steps — the caller is
+  // responsible for sending the matching number of step commands to keep
+  // the physical board in sync with this value.
+  void setTeamAScore(int score) {
+    teamAScore = score.clamp(0, 999);
     notifyListeners();
   }
 
@@ -239,6 +218,11 @@ class GameState extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setTeamBScore(int score) {
+    teamBScore = score.clamp(0, 999);
+    notifyListeners();
+  }
+
   void teamBFoulPlus() {
     teamBFouls++;
     notifyListeners();
@@ -263,19 +247,13 @@ class GameState extends ChangeNotifier {
   void setGameTime({required int minutes, required int seconds}) {
     final m = minutes.clamp(0, 99);
     final s = seconds.clamp(0, 59);
-    min1 = m ~/ 10;
-    min2 = m % 10;
-    sec1 = s ~/ 10;
-    sec2 = s % 10;
-    mSec = 0;
+    _gameTimeMs = (m * 60 + s) * 1000;
     notifyListeners();
   }
 
   void setShotClock({required int seconds}) {
     final s = seconds.clamp(0, 99);
-    shot1 = s ~/ 10;
-    shot2 = s % 10;
-    mShot = 0;
+    _shotClockMs = s * 1000;
     notifyListeners();
   }
 

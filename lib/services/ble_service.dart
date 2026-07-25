@@ -158,9 +158,39 @@ class BleService extends ChangeNotifier {
   }
 
   // ── Data sending ─────────────────────────────────────────────────────────
+  //
+  // All writes (single-byte commands AND timer packets) go through _enqueue
+  // so only one is ever in flight at a time, with a minimum gap enforced
+  // between them. Serializing alone isn't enough: `write(withoutResponse:
+  // true)` can resolve almost as soon as the OS accepts the write, so two
+  // queued writes can still leave the BLE stack back-to-back with no real
+  // gap. The Arduino just reads a raw fixed-length byte stream with no
+  // framing, so if a command byte (e.g. a score tap) lands right against a
+  // timer packet from the 200ms loop, its receive buffer can merge the two
+  // and the game time / shot clock digits come out garbled — even though
+  // the score command itself never touches that state.
+  Future<void> _writeQueue = Future.value();
+  DateTime? _lastWriteAt;
+  static const _minWriteGap = Duration(milliseconds: 60);
+
+  Future<void> _enqueue(Future<void> Function() op) {
+    final result = _writeQueue.then((_) async {
+      final lastWrite = _lastWriteAt;
+      if (lastWrite != null) {
+        final wait = _minWriteGap - DateTime.now().difference(lastWrite);
+        if (wait > Duration.zero) await Future.delayed(wait);
+      }
+      await op();
+      _lastWriteAt = DateTime.now();
+    });
+    _writeQueue = result.catchError((_) {});
+    return result;
+  }
 
   /// Send a single ASCII command byte (button press) to all connected devices.
-  Future<void> sendCommand(int asciiCode) async {
+  Future<void> sendCommand(int asciiCode) => _enqueue(() => _writeCommand(asciiCode));
+
+  Future<void> _writeCommand(int asciiCode) async {
     final char = String.fromCharCode(asciiCode);
     debugPrint('[BLE] sendCommand: 0x${asciiCode.toRadixString(16).toUpperCase()} ("$char") — '
         '${_connectedDevices.length} device(s)');
@@ -179,8 +209,28 @@ class BleService extends ChangeNotifier {
     }
   }
 
+  /// Send a timer-update packet several times in quick succession.
+  ///
+  /// `write(withoutResponse: true)` gives no delivery confirmation, and the
+  /// continuous 200ms tick loop only resends while the clock is running —
+  /// so a one-off packet (New Game, edit time/shot clock) that gets dropped
+  /// leaves the board showing stale/garbled digits with nothing to correct
+  /// it. Repeating the write a few times makes that far less likely.
+  Future<void> sendPacketReliable(
+    String packet, {
+    int times = 3,
+    Duration gap = const Duration(milliseconds: 80),
+  }) async {
+    for (var i = 0; i < times; i++) {
+      await sendPacket(packet);
+      if (i < times - 1) await Future.delayed(gap);
+    }
+  }
+
   /// Send a timer-update packet string to all connected devices.
-  Future<void> sendPacket(String packet) async {
+  Future<void> sendPacket(String packet) => _enqueue(() => _writePacket(packet));
+
+  Future<void> _writePacket(String packet) async {
     final escaped = packet.replaceAll('\r', '\\r').replaceAll('\n', '\\n');
     debugPrint('[BLE] sendPacket: "$escaped" — ${_connectedDevices.length} device(s)');
     final data = utf8.encode(packet);

@@ -40,10 +40,20 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
   void _send(int ascii) => context.read<BleService>().sendCommand(ascii);
 
   void _sendAndUpdate(void Function() mutation) {
+    final gs = context.read<GameState>();
     mutation();
-    context.read<BleService>().sendPacket(
-      context.read<GameState>().buildPacket(),
-    );
+    final ble = context.read<BleService>();
+    final packet = gs.buildPacket();
+    if (gs.key) {
+      // Clock is running — the 200ms tick loop resends the current state
+      // every cycle, so a single send is enough; a burst here would just
+      // queue up behind (and visibly race) the loop's own packets.
+      ble.sendPacket(packet);
+    } else {
+      // Clock is stopped — nothing else will resend this, so guard against
+      // a dropped write with a few repeats.
+      ble.sendPacketReliable(packet);
+    }
   }
 
   Future<void> _confirmNewGame() async {
@@ -78,7 +88,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
         '[PROTO] NEW GAME — sending 0x76 ("v") then reset packet "$packet"',
       );
       await ble.sendCommand(Cmd.newGame);
-      await ble.sendPacket(packet);
+      await ble.sendPacketReliable(packet);
     }
   }
 
@@ -93,6 +103,63 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
       return;
     }
     ifStopped();
+  }
+
+  // ── Score edit (type a number instead of tapping +1/+2/-1 repeatedly) ──
+  // The board has no "set score" command, only +1/-1 steps, so after the
+  // app-side score is updated we walk the board to match by firing that
+  // many single-byte step commands through BleService's serialized queue —
+  // the same commands +1/-1 buttons already send, just automated.
+  Future<void> _editTeamScore({
+    required int current,
+    required void Function(int) applyLocal,
+    required int plusCmd,
+    required int minusCmd,
+    required String title,
+  }) async {
+    var text = '$current';
+
+    final result = await showDialog<int>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF112233),
+        title: Text(title, style: const TextStyle(color: Colors.white)),
+        content: TextFormField(
+          initialValue: text,
+          keyboardType: TextInputType.number,
+          autofocus: true,
+          style: const TextStyle(color: Colors.white),
+          onChanged: (v) => text = v,
+          decoration: const InputDecoration(
+            labelText: 'Score',
+            labelStyle: TextStyle(color: Colors.white54),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+            onPressed: () => Navigator.pop(ctx, int.tryParse(text) ?? current),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted || result == null) return;
+    final target = result.clamp(0, 999);
+    final delta = target - current;
+    if (delta == 0) return;
+
+    applyLocal(target);
+    final ble = context.read<BleService>();
+    final cmd = delta > 0 ? plusCmd : minusCmd;
+    for (var i = 0; i < delta.abs(); i++) {
+      ble.sendCommand(cmd);
+    }
   }
 
   Future<void> _editGameTime() async {
@@ -166,7 +233,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
 
     if (!mounted || result == null) return;
     gs.setGameTime(minutes: result.minutes, seconds: result.seconds);
-    context.read<BleService>().sendPacket(gs.buildPacket());
+    context.read<BleService>().sendPacketReliable(gs.buildPacket());
   }
 
   Future<void> _editPeriod() async {
@@ -277,7 +344,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
 
     if (!mounted || result == null) return;
     gs.setShotClock(seconds: result);
-    context.read<BleService>().sendPacket(gs.buildPacket());
+    context.read<BleService>().sendPacketReliable(gs.buildPacket());
   }
 
   Future<void> _confirmNextQuarter() async {
@@ -356,44 +423,22 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
           ),
           const SizedBox(width: 5),
           Expanded(
-            child: ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF1E3050),
-                minimumSize: Size.zero,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 4,
-                  vertical: 10,
-                ),
-              ),
-              onPressed: () {
-                _sendAndUpdate(() => gs.resetShotClock(14));
-                _send(Cmd.shotClock14);
-              },
-              child: const FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Text('SC 14'),
-              ),
+            child: _ShotClockPresetBtn(
+              label: 'SC 14',
+              onTap: () =>
+                  _sendAndUpdate(() => gs.resetShotClock(14, start: false)),
+              onDoubleTap: () =>
+                  _sendAndUpdate(() => gs.resetShotClock(14, start: true)),
             ),
           ),
           const SizedBox(width: 5),
           Expanded(
-            child: ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF1E3050),
-                minimumSize: Size.zero,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 4,
-                  vertical: 10,
-                ),
-              ),
-              onPressed: () {
-                _sendAndUpdate(() => gs.resetShotClock(24));
-                _send(Cmd.shotClock24);
-              },
-              child: const FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Text('SC 24'),
-              ),
+            child: _ShotClockPresetBtn(
+              label: 'SC 24',
+              onTap: () =>
+                  _sendAndUpdate(() => gs.resetShotClock(24, start: false)),
+              onDoubleTap: () =>
+                  _sendAndUpdate(() => gs.resetShotClock(24, start: true)),
             ),
           ),
         ],
@@ -447,33 +492,40 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
     fouls: gs.teamAFouls,
     tol: gs.teamATOL,
     accentColor: Colors.blue,
+    onScoreTap: () => _editTeamScore(
+      current: gs.teamAScore,
+      applyLocal: gs.setTeamAScore,
+      plusCmd: Cmd.teamBPlus1,
+      minusCmd: Cmd.teamBMinus1,
+      title: 'Edit Team A Score',
+    ),
     onPlus1: () {
       gs.teamAScorePlus1();
-      _send(Cmd.teamAPlus1);
+      _send(Cmd.teamBPlus1);
     },
     onPlus2: () {
       gs.teamAScorePlus2();
-      _send(Cmd.teamAPlus2);
+      _send(Cmd.teamBPlus2);
     },
     onMinus1: () {
       gs.teamAScoreMinus1();
-      _send(Cmd.teamAMinus1);
+      _send(Cmd.teamBMinus1);
     },
     onFoulPlus: () {
       gs.teamAFoulPlus();
-      _send(Cmd.teamAFoulPlus);
+      _send(Cmd.teamBFoulPlus);
     },
     onFoulMinus: () {
       gs.teamAFoulMinus();
-      _send(Cmd.teamAFoulMinus);
+      _send(Cmd.teamBFoulMinus);
     },
     onTolMinus: () {
       gs.teamATOLMinus();
-      _send(Cmd.teamATolMinus);
+      _send(Cmd.teamBTolMinus);
     },
     onTolPlus: () {
       gs.teamATOLPlus();
-      _send(Cmd.teamATolPlus);
+      _send(Cmd.teamBTolPlus);
     },
   );
 
@@ -483,33 +535,40 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
     fouls: gs.teamBFouls,
     tol: gs.teamBTOL,
     accentColor: Colors.red,
+    onScoreTap: () => _editTeamScore(
+      current: gs.teamBScore,
+      applyLocal: gs.setTeamBScore,
+      plusCmd: Cmd.teamAPlus1,
+      minusCmd: Cmd.teamAMinus1,
+      title: 'Edit Team B Score',
+    ),
     onPlus1: () {
       gs.teamBScorePlus1();
-      _send(Cmd.teamBPlus1);
+      _send(Cmd.teamAPlus1);
     },
     onPlus2: () {
       gs.teamBScorePlus2();
-      _send(Cmd.teamBPlus2);
+      _send(Cmd.teamAPlus2);
     },
     onMinus1: () {
       gs.teamBScoreMinus1();
-      _send(Cmd.teamBMinus1);
+      _send(Cmd.teamAMinus1);
     },
     onFoulPlus: () {
       gs.teamBFoulPlus();
-      _send(Cmd.teamBFoulPlus);
+      _send(Cmd.teamAFoulPlus);
     },
     onFoulMinus: () {
       gs.teamBFoulMinus();
-      _send(Cmd.teamBFoulMinus);
+      _send(Cmd.teamAFoulMinus);
     },
     onTolMinus: () {
       gs.teamBTOLMinus();
-      _send(Cmd.teamBTolMinus);
+      _send(Cmd.teamATolMinus);
     },
     onTolPlus: () {
       gs.teamBTOLPlus();
-      _send(Cmd.teamBTolPlus);
+      _send(Cmd.teamATolPlus);
     },
   );
 
@@ -606,6 +665,49 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
         child: isLandscape
             ? _landscapeLayout(gs, ble)
             : _portraitLayout(gs, ble),
+      ),
+    );
+  }
+}
+
+/// SC14/SC24 preset button: single tap loads the value without starting it,
+/// double tap loads it and starts the countdown. Uses InkWell's own
+/// onTap/onDoubleTap (rather than a nested GestureDetector) so there's only
+/// one gesture recognizer — avoids gesture-arena conflicts and gets the
+/// standard double-tap disambiguation delay for free.
+class _ShotClockPresetBtn extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+  final VoidCallback onDoubleTap;
+
+  const _ShotClockPresetBtn({
+    required this.label,
+    required this.onTap,
+    required this.onDoubleTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0xFF1E3050),
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: onTap,
+        onDoubleTap: onDoubleTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              label,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
