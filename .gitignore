@@ -46,3 +46,6 @@ app.*.map.json
 
 # Flutter DevTools generated config
 devtools_options.yaml
+
+# Secrets — not committed; see .env.example for the required keys
+.env

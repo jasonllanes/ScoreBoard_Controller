@@ -137,6 +137,19 @@ class GameState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Resets just the game time / shot clock to their defaults (10:00 / 24)
+  /// without touching scores, fouls, TOL, or period — used by "Show Board"
+  /// so the boards always initialize to a known state instead of whatever
+  /// was left over from a previous session.
+  void resetTimersToDefault() {
+    key = false;
+    shotclockStatus = false;
+    _gameTimeMs = _defaultGameMs;
+    _shotClockMs = _defaultShotMs;
+    hornx = 0;
+    notifyListeners();
+  }
+
   void newGame() {
     key = false;
     shotclockStatus = false;

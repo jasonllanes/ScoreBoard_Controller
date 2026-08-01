@@ -263,6 +263,39 @@ class BleService extends ChangeNotifier {
     }
   }
 
+  // Horn/buzzer byte — same value as Cmd.horn in models/commands.dart.
+  // Not importing that file here to avoid this service depending on the
+  // app's command-semantics layer for one constant.
+  static const int _hornByte = 0x5F;
+
+  /// Trigger the horn on a single connected device (not broadcast to all)
+  /// so it can be visually/audibly identified — useful since all boards
+  /// currently advertise the same BLE name and are otherwise
+  /// indistinguishable from the device list alone.
+  Future<void> identify(BluetoothDevice device) =>
+      _enqueue(() => _writeCommandToDevice(device, _hornByte));
+
+  Future<void> _writeCommandToDevice(BluetoothDevice device, int asciiCode) async {
+    BleDevice? target;
+    for (final ble in _connectedDevices) {
+      if (ble.device.remoteId == device.remoteId) {
+        target = ble;
+        break;
+      }
+    }
+    if (target == null || !target.isConnected || target.characteristic == null) {
+      return;
+    }
+    debugPrint('[BLE] identify: 0x${asciiCode.toRadixString(16).toUpperCase()} '
+        '→ ${target.name} (${device.remoteId})');
+    try {
+      await target.characteristic!.write([asciiCode], withoutResponse: true);
+      debugPrint('[BLE]   ✓ write OK');
+    } catch (e) {
+      debugPrint('[BLE]   ✗ write FAILED: $e');
+    }
+  }
+
   /// Send a timer-update packet several times in quick succession.
   ///
   /// `write(withoutResponse: true)` gives no delivery confirmation, and the
@@ -290,8 +323,28 @@ class BleService extends ChangeNotifier {
   String? _latestPacket;
   bool _packetWorkerRunning = false;
 
+  // TimerService resends the current packet every 200ms continuously, even
+  // while stopped — that's normally what makes the stream self-correcting.
+  // But right after "Show Board" sends its trigger byte, some boards seem
+  // to need an uninterrupted stretch of silence to finish their idle→live
+  // transition; a continuous stream of writes during that window can
+  // restart the transition instead of letting it complete (seen as a board
+  // looping back to its branding screen). This lets a caller request a
+  // brief pause on the continuous stream — sendPacket calls during it are
+  // silently dropped rather than queued, since the next real tick after
+  // the pause ends will carry fresh state anyway.
+  DateTime? _quietUntil;
+
+  void pauseContinuousSend(Duration duration) {
+    _quietUntil = DateTime.now().add(duration);
+  }
+
+  bool get _isQuiet =>
+      _quietUntil != null && DateTime.now().isBefore(_quietUntil!);
+
   /// Send a timer-update packet string to all connected devices.
   Future<void> sendPacket(String packet) async {
+    if (_isQuiet) return;
     _latestPacket = packet;
     if (_packetWorkerRunning) return;
     _packetWorkerRunning = true;
@@ -315,23 +368,27 @@ class BleService extends ChangeNotifier {
   }
 
   Future<void> _writePacket(String packet) async {
-    final escaped = packet.replaceAll('\r', '\\r').replaceAll('\n', '\\n');
-    debugPrint('[BLE] sendPacket: "$escaped" — ${_connectedDevices.length} device(s)');
-    // Broadcast the identical packet to every connected board — the main
-    // board and both shot clocks all parse it the same way. (Previously
-    // tried sending the shot clocks a prefix-stripped variant based on a
-    // theory that turned out wrong and regressed the main board instead;
-    // reverted.)
+    // All 3 boards run the same firmware/protocol — the main board just
+    // has its idle/branding-screen code path commented out, it's not a
+    // different parser. Broadcast the identical packet to everyone.
+    // (Tried prefix-stripping shot-clock-tagged devices twice now based on
+    // a parsing-difference theory that turned out wrong both times —
+    // confirmed false by the firmware itself. Not retrying this again.)
+    //
+    // No routine debugPrint here on purpose — this fires every tick
+    // forever (see timer_service.dart), and logging every single send
+    // floods the console so badly that the much rarer, much more useful
+    // sendCommand logs (button taps) become impossible to find. Only log
+    // failures, which are the only thing worth seeing from this path.
     final data = utf8.encode(packet);
     for (final ble in _connectedDevices) {
-      debugPrint('[BLE]   → ${ble.name} (${ble.device.remoteId}) '
-          'characteristic=${ble.characteristic != null ? "present" : "NULL"}');
       if (ble.isConnected && ble.characteristic != null) {
         try {
           await ble.characteristic!.write(data, withoutResponse: true);
-          debugPrint('[BLE]   ✓ write OK');
         } catch (e) {
-          debugPrint('[BLE]   ✗ write FAILED: $e');
+          final escaped = packet.replaceAll('\r', '\\r').replaceAll('\n', '\\n');
+          debugPrint('[BLE] ✗ sendPacket "$escaped" FAILED for '
+              '${ble.name} (${ble.device.remoteId}): $e');
         }
       }
     }

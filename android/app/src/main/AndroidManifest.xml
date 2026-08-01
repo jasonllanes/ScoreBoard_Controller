@@ -11,6 +11,10 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Required for Supabase login (network requests). Only present in
+         the debug manifest by default, which is enough for `flutter run`
+         but not for release builds. -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <!-- Lets the app request exemption from Doze/App Standby throttling,
          which otherwise can batch/delay the game & shot clock tick timer
          while running unplugged from USB. -->

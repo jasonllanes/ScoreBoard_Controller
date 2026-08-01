@@ -4,6 +4,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import '../models/commands.dart';
 import '../models/game_state.dart';
 import '../services/ble_service.dart';
+import '../widgets/app_drawer.dart';
 import '../widgets/timer_display.dart';
 import '../widgets/team_panel.dart';
 import '../widgets/connection_bar.dart';
@@ -469,50 +470,62 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
     return Container(
       color: const Color(0xFF0A0E1A),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      child: Row(
-        children: [
-          _BottomBtn(label: '◀ Left', onTap: () => _send(Cmd.leftArrow)),
-          const SizedBox(width: 4),
-          _BottomBtn(label: 'Right ▶', onTap: () => _send(Cmd.rightArrow)),
-          const SizedBox(width: 4),
-          _BottomBtn(
-            label: 'Show Board',
-            color: Colors.teal,
-            loading: _showBoardLoading,
-            onTap: _showBoardLoading
-                ? null
-                : () async {
-                    // TimerService now resends the current packet every
-                    // 200ms continuously, even while the clock is stopped
-                    // (see timer_service.dart), so this no longer needs to
-                    // manually burst/retry — any write that lands garbled
-                    // while the board is still mid-transition self-corrects
-                    // on its own within one more tick. Just send the
-                    // trigger once; the loading spinner is purely cosmetic,
-                    // covering the board's own transition time.
-                    setState(() => _showBoardLoading = true);
-                    try {
-                      final ble = context.read<BleService>();
-                      await ble.sendCommand(Cmd.showScoreboard);
-                      await Future.delayed(const Duration(seconds: 3));
-                    } finally {
-                      if (mounted) setState(() => _showBoardLoading = false);
-                    }
-                  },
-          ),
-          const Spacer(),
-          _BottomBtn(
-            label: 'Next QTR',
-            color: Colors.blueGrey,
-            onTap: gs.period < 4 ? _confirmNextQuarter : null,
-          ),
-          const SizedBox(width: 4),
-          _BottomBtn(
-            label: 'New Game',
-            color: Colors.deepOrange,
-            onTap: _confirmNewGame,
-          ),
-        ],
+      // 5 fixed-width buttons + a Spacer can overflow on narrower screens
+      // (seen as a RenderFlex overflow) — scroll horizontally instead of
+      // clipping/erroring when they don't all fit.
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            _BottomBtn(label: '◀ Left', onTap: () => _send(Cmd.leftArrow)),
+            const SizedBox(width: 4),
+            _BottomBtn(label: 'Right ▶', onTap: () => _send(Cmd.rightArrow)),
+            const SizedBox(width: 4),
+            _BottomBtn(
+              label: 'Show Board',
+              color: Colors.teal,
+              loading: _showBoardLoading,
+              onTap: _showBoardLoading
+                  ? null
+                  : () async {
+                      // Reset the timers to their defaults (10:00 / 24) so
+                      // the boards initialize to a known state instead of
+                      // whatever was left over from a previous session.
+                      //
+                      // Pause the continuous 200ms packet stream for the
+                      // duration of the board's idle → live transition —
+                      // some boards seem to need real silence to finish that
+                      // transition; a continuous stream of writes during it
+                      // can restart the transition instead of completing it
+                      // (seen as a board looping back to its branding
+                      // screen). The stream resumes automatically once the
+                      // pause elapses and delivers the (already-reset) state.
+                      setState(() => _showBoardLoading = true);
+                      try {
+                        gs.resetTimersToDefault();
+                        final ble = context.read<BleService>();
+                        ble.pauseContinuousSend(const Duration(seconds: 3));
+                        await ble.sendCommand(Cmd.showScoreboard);
+                        await Future.delayed(const Duration(seconds: 3));
+                      } finally {
+                        if (mounted) setState(() => _showBoardLoading = false);
+                      }
+                    },
+            ),
+            const SizedBox(width: 24),
+            _BottomBtn(
+              label: 'Next QTR',
+              color: Colors.blueGrey,
+              onTap: gs.period < 4 ? _confirmNextQuarter : null,
+            ),
+            const SizedBox(width: 4),
+            _BottomBtn(
+              label: 'New Game',
+              color: Colors.deepOrange,
+              onTap: _confirmNewGame,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -705,6 +718,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
 
     return Scaffold(
       backgroundColor: const Color(0xFF0D1B2A),
+      drawer: const AppDrawer(),
       body: SafeArea(
         child: isLandscape
             ? _landscapeLayout(gs, ble)
@@ -782,7 +796,10 @@ class _BottomBtn extends StatelessWidget {
         child: const SizedBox(
           width: 16,
           height: 16,
-          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70),
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            color: Colors.white70,
+          ),
         ),
       );
     }

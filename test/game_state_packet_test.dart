@@ -11,8 +11,7 @@ void main() {
 
   test('newGame() resets buildPacket() to default timer state', () {
     final gs = GameState();
-    gs.min1 = 0;
-    gs.sec1 = 3;
+    gs.setGameTime(minutes: 0, seconds: 30);
     gs.teamAScore = 10;
     gs.newGame();
     expect(gs.buildPacket(), '_1000024001');

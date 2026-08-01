@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:provider/provider.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'config/supabase_config.dart';
 import 'models/game_state.dart';
+import 'services/app_settings_service.dart';
 import 'services/ble_service.dart';
 import 'services/timer_service.dart';
-import 'screens/splash_screen.dart';
+import 'screens/auth_gate.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // Allow both portrait and landscape — layout adapts via OrientationBuilder
   SystemChrome.setPreferredOrientations([
@@ -15,6 +19,11 @@ void main() {
     DeviceOrientation.landscapeLeft,
     DeviceOrientation.landscapeRight,
   ]);
+  await dotenv.load();
+  await Supabase.initialize(
+    url: SupabaseConfig.url,
+    publishableKey: SupabaseConfig.anonKey,
+  );
   runApp(const ScoreboardApp());
 }
 
@@ -27,6 +36,7 @@ class ScoreboardApp extends StatelessWidget {
       providers: [
         ChangeNotifierProvider(create: (_) => GameState()),
         ChangeNotifierProvider(create: (_) => BleService()),
+        ChangeNotifierProvider(create: (_) => AppSettingsService()..load()),
         // Singleton, started once at app launch — each ScoreboardScreen
         // used to create its own TimerService, so a double-tap on "Go to
         // Scoreboard" could push two screens and end up with two timers
@@ -58,7 +68,7 @@ class ScoreboardApp extends StatelessWidget {
             style: ElevatedButton.styleFrom(foregroundColor: Colors.white),
           ),
         ),
-        home: const SplashScreen(),
+        home: const AuthGate(),
       ),
     );
   }
