@@ -19,6 +19,12 @@ class ScoreboardScreen extends StatefulWidget {
 class _ScoreboardScreenState extends State<ScoreboardScreen> {
   bool _showBoardLoading = false;
 
+  // True once the boards' idle/branding screen has been cleared this
+  // session — either via the standalone Show Board button, or
+  // automatically on the first Start press. Prevents Start from repeating
+  // the clear-idle-screen pause on every subsequent Stop→Start resume.
+  bool _boardIdleCleared = false;
+
   // SC14/SC24: first tap just loads the value (doesn't start it); tapping
   // the SAME preset again — whenever that happens, no quick-double-tap
   // timing required — is what actually starts it counting down. Tapping a
@@ -400,6 +406,23 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                 final isStart = gs.key; // already toggled
                 final cmd = isStart ? Cmd.startClock : Cmd.stopClock;
                 final ble = context.read<BleService>();
+
+                // First Start of the session: the shot clocks may still be
+                // showing their idle branding screen (needs the same 'x'
+                // trigger as the standalone Show Board button to clear).
+                // Only do this once — after that the boards are already
+                // live, and repeating the pause on every Stop→Start resume
+                // would add a pointless delay to what should be instant.
+                // Unlike Show Board, this must NOT reset the game/shot
+                // clock time — Start should begin from whatever time is
+                // already set, not force it back to defaults.
+                if (isStart && !_boardIdleCleared) {
+                  _boardIdleCleared = true;
+                  ble.pauseContinuousSend(const Duration(seconds: 3));
+                  await ble.sendCommand(Cmd.showScoreboard);
+                  await Future.delayed(const Duration(seconds: 3));
+                }
+
                 final packet = gs.buildPacket();
                 final ending = GameState.timerPacketLineEnding
                     .replaceAll('\r', '\\r')
@@ -507,6 +530,7 @@ class _ScoreboardScreenState extends State<ScoreboardScreen> {
                         ble.pauseContinuousSend(const Duration(seconds: 3));
                         await ble.sendCommand(Cmd.showScoreboard);
                         await Future.delayed(const Duration(seconds: 3));
+                        _boardIdleCleared = true;
                       } finally {
                         if (mounted) setState(() => _showBoardLoading = false);
                       }

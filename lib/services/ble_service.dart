@@ -368,27 +368,34 @@ class BleService extends ChangeNotifier {
   }
 
   Future<void> _writePacket(String packet) async {
-    // All 3 boards run the same firmware/protocol — the main board just
-    // has its idle/branding-screen code path commented out, it's not a
-    // different parser. Broadcast the identical packet to everyone.
-    // (Tried prefix-stripping shot-clock-tagged devices twice now based on
-    // a parsing-difference theory that turned out wrong both times —
-    // confirmed false by the firmware itself. Not retrying this again.)
-    //
-    // No routine debugPrint here on purpose — this fires every tick
-    // forever (see timer_service.dart), and logging every single send
-    // floods the console so badly that the much rarer, much more useful
-    // sendCommand logs (button taps) become impossible to find. Only log
-    // failures, which are the only thing worth seeing from this path.
-    final data = utf8.encode(packet);
+    final escaped = packet.replaceAll('\r', '\\r').replaceAll('\n', '\\n');
+    debugPrint('[BLE] sendPacket: "$escaped" — ${_connectedDevices.length} device(s)');
+    // Hardware evidence (2026-08-01): a shot-clock-tagged board displayed
+    // "01:00"/"02" instead of "10:00"/"24" — exactly the pattern you get
+    // when every field is read one byte too early. The main board's
+    // firmware skips the leading prefix byte before reading digits; this
+    // board's firmware doesn't, so its byte 0 needs to already be the true
+    // first digit. Strip the prefix for boards tagged shotClock; leave
+    // mainBoard/unknown untouched.
+    // (A previous attempt at this same fix was reverted as "confirmed
+    // wrong" based on inconclusive testing — this hardware capture is what
+    // overrides that conclusion. If it regresses again, get a fresh photo
+    // of the exact wrong digits before reverting, the same way this one
+    // was diagnosed.)
+    final fullData = utf8.encode(packet);
+    final strippedData =
+        packet.isNotEmpty ? utf8.encode(packet.substring(1)) : fullData;
     for (final ble in _connectedDevices) {
+      debugPrint('[BLE]   → ${ble.name} (${ble.device.remoteId}) '
+          'role=${ble.role.name} '
+          'characteristic=${ble.characteristic != null ? "present" : "NULL"}');
       if (ble.isConnected && ble.characteristic != null) {
+        final data = ble.role == BleRole.shotClock ? strippedData : fullData;
         try {
           await ble.characteristic!.write(data, withoutResponse: true);
+          debugPrint('[BLE]   ✓ write OK');
         } catch (e) {
-          final escaped = packet.replaceAll('\r', '\\r').replaceAll('\n', '\\n');
-          debugPrint('[BLE] ✗ sendPacket "$escaped" FAILED for '
-              '${ble.name} (${ble.device.remoteId}): $e');
+          debugPrint('[BLE]   ✗ write FAILED: $e');
         }
       }
     }
